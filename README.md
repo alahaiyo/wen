@@ -41,6 +41,8 @@ sudo nano /etc/wen.conf
 ```bash
 wen 如何解压tar文件？
 ```
+<img width="488" alt="image" src="https://github.com/user-attachments/assets/8b82a446-676f-4e10-9d0c-43dd1c3175ad" />
+
 
 ```bash
 wen 用Python如何读取JSON文件？

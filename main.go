@@ -15,15 +15,17 @@ import (
 
 // Config holds the configuration from /etc/wen.conf
 type Config struct {
-	Model         string `json:"model"`
-	APIKey        string `json:"api_key"`
-	APIURL        string `json:"api_url"`
-	Provider      string `json:"provider"` // "openai", "anthropic", etc.
+	Model          string `json:"model"`
+	APIKey         string `json:"api_key"`
+	APIURL         string `json:"api_url"`
+	Provider       string `json:"provider"` // "openai", "anthropic", etc.
 	PromptTemplate string `json:"prompt_template"`
+	Stream         bool   `json:"stream"`   // Whether to use streaming API
 }
 
 // Default prompt template
-const defaultPromptTemplate = "回答用户问题，务必做到简洁，不要有任何废话。输出纯文本格式(NO MARKDOWN)，适合在终端显示。使用以下格式添加颜色和样式：<red>红色文本</red>、<green>绿色文本</green>、<blue>蓝色文本</blue>、<bold>粗体文本</bold>、<yellow>黄色文本</yellow>。重要内容请使用颜色或粗体突出显示。"
+const defaultPromptTemplate = "回答用户问题，务必做到简洁，不要有任何废话。输出纯文本格式(NO MARKDOWN)，适合在终端显示。"
+const promptForTerminal = "使用以下格式添加颜色和样式：<red>红色文本</red>、<green>绿色文本</green>、<blue>蓝色文本</blue>、<bold>粗体文本</bold>、<yellow>黄色文本</yellow>。重要内容请使用颜色或粗体突出显示。"
 
 // processTerminalFormatting converts custom format tags to ANSI escape sequences
 func processTerminalFormatting(text string) string {
@@ -75,16 +77,30 @@ func main() {
 	// Get the user question by joining all arguments
 	question := strings.Join(os.Args[1:], " ")
 
-	// Ask the AI model
-	answer, elapsedTime, err := askAI(question, config)
-	if err != nil {
-		fmt.Printf("请求AI失败: %v\n", err)
+	startTime := time.Now()
+	var answer string
+	var err2 error
+
+	// Use streaming or non-streaming API based on config
+	if config.Stream {
+		answer, err2 = streamAI(question, config)
+	} else {
+		answer, err2 = askAI(question, config)
+	}
+
+	if err2 != nil {
+		fmt.Printf("请求AI失败: %v\n", err2)
 		os.Exit(1)
 	}
 
-	// Process and print the answer with terminal formatting
-	formattedAnswer := processTerminalFormatting(answer)
-	fmt.Println(formattedAnswer)
+	// Only print the answer if not streaming (streaming already prints)
+	if !config.Stream {
+		// Process and print the answer with terminal formatting
+		formattedAnswer := processTerminalFormatting(answer)
+		fmt.Println(formattedAnswer)
+	}
+
+	elapsedTime := time.Since(startTime).Seconds()
 	fmt.Printf("\n\033[1m耗时: %.2f 秒\033[0m\n", elapsedTime)
 }
 
@@ -98,10 +114,11 @@ func loadConfig(configPath string) (*Config, error) {
 
 	config := &Config{
 		// Default values
-		Model:         "gpt-3.5-turbo",
-		APIURL:        "https://api.openai.com/v1/chat/completions",
-		Provider:      "openai",
+		Model:          "gpt-3.5-turbo",
+		APIURL:         "https://api.openai.com/v1/chat/completions",
+		Provider:       "openai",
 		PromptTemplate: defaultPromptTemplate,
+		Stream:         true, // Default to non-streaming
 	}
 
 	scanner := bufio.NewScanner(file)
@@ -131,6 +148,8 @@ func loadConfig(configPath string) (*Config, error) {
 			config.Provider = value
 		case "prompt_template":
 			config.PromptTemplate = value
+		case "stream":
+			config.Stream = strings.ToLower(value) == "true" || value == "1"
 		}
 	}
 
@@ -146,29 +165,32 @@ func loadConfig(configPath string) (*Config, error) {
 }
 
 // askAI sends the question to the AI API and returns the answer
-func askAI(question string, config *Config) (string, float64, error) {
-	startTime := time.Now()
-	
+func askAI(question string, config *Config) (string, error) {
 	var requestBody []byte
 	var err error
 
+	// 在非流式模式下，添加终端格式化提示
+	if !config.Stream {
+		config.PromptTemplate = config.PromptTemplate + " " + promptForTerminal
+	}
+
 	switch config.Provider {
 	case "openai":
-		requestBody, err = createOpenAIRequest(question, config)
+		requestBody, err = createOpenAIRequest(question, config, false)
 	case "anthropic":
-		requestBody, err = createAnthropicRequest(question, config)
+		requestBody, err = createAnthropicRequest(question, config, false)
 	default:
-		requestBody, err = createOpenAIRequest(question, config) // Default to OpenAI
+		requestBody, err = createOpenAIRequest(question, config, false) // Default to OpenAI
 	}
 
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
 
 	// Create HTTP request
 	req, err := http.NewRequest("POST", config.APIURL, bytes.NewBuffer(requestBody))
 	if err != nil {
-		return "", 0, fmt.Errorf("创建请求失败: %w", err)
+		return "", fmt.Errorf("创建请求失败: %w", err)
 	}
 
 	// Set headers
@@ -179,18 +201,18 @@ func askAI(question string, config *Config) (string, float64, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("发送请求失败: %w", err)
+		return "", fmt.Errorf("发送请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Read response
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", 0, fmt.Errorf("读取响应失败: %w", err)
+		return "", fmt.Errorf("读取响应失败: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("API返回错误: %s", string(body))
+		return "", fmt.Errorf("API返回错误: %s", string(body))
 	}
 
 	// Parse response based on provider
@@ -201,17 +223,74 @@ func askAI(question string, config *Config) (string, float64, error) {
 	default: // Default to OpenAI
 		answer, err = parseOpenAIResponse(body)
 	}
-	
+
 	if err != nil {
-		return "", 0, err
+		return "", err
 	}
-	
-	elapsedTime := time.Since(startTime).Seconds()
-	return answer, elapsedTime, nil
+
+	return answer, nil
+}
+
+// streamAI sends the question to the AI API and streams the response
+func streamAI(question string, config *Config) (string, error) {
+	var requestBody []byte
+	var err error
+
+	switch config.Provider {
+	case "openai":
+		requestBody, err = createOpenAIRequest(question, config, true)
+	case "anthropic":
+		requestBody, err = createAnthropicRequest(question, config, true)
+	default:
+		requestBody, err = createOpenAIRequest(question, config, true) // Default to OpenAI
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest("POST", config.APIURL, bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+config.APIKey)
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Send request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("发送请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API返回错误: %s", string(body))
+	}
+
+	// Process streaming response based on provider
+	var fullResponse string
+	switch config.Provider {
+	case "anthropic":
+		fullResponse, err = processAnthropicStream(resp.Body)
+	default: // Default to OpenAI
+		fullResponse, err = processOpenAIStream(resp.Body)
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	return fullResponse, nil
 }
 
 // createOpenAIRequest creates the request body for OpenAI API
-func createOpenAIRequest(question string, config *Config) ([]byte, error) {
+func createOpenAIRequest(question string, config *Config, stream bool) ([]byte, error) {
 	requestBody := map[string]interface{}{
 		"model": config.Model,
 		"messages": []map[string]string{
@@ -224,13 +303,25 @@ func createOpenAIRequest(question string, config *Config) ([]byte, error) {
 				"content": question,
 			},
 		},
+		"stream": stream,
 	}
 
-	return json.Marshal(requestBody)
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, err
+	}
+	
+	// 调试打印
+	fmt.Println("\n\033[1m发送给 OpenAI 的内容:\033[0m")
+	fmt.Printf("系统提示: %s\n", config.PromptTemplate)
+	fmt.Printf("用户问题: %s\n", question)
+	fmt.Println()
+	
+	return jsonData, nil
 }
 
 // createAnthropicRequest creates the request body for Anthropic API
-func createAnthropicRequest(question string, config *Config) ([]byte, error) {
+func createAnthropicRequest(question string, config *Config, stream bool) ([]byte, error) {
 	requestBody := map[string]interface{}{
 		"model": config.Model,
 		"messages": []map[string]string{
@@ -240,9 +331,21 @@ func createAnthropicRequest(question string, config *Config) ([]byte, error) {
 			},
 		},
 		"system": config.PromptTemplate,
+		"stream": stream,
 	}
 
-	return json.Marshal(requestBody)
+	jsonData, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, err
+	}
+	
+	// 调试打印
+	fmt.Println("\n\033[1m发送给 Anthropic 的内容:\033[0m")
+	fmt.Printf("系统提示: %s\n", config.PromptTemplate)
+	fmt.Printf("用户问题: %s\n", question)
+	fmt.Println()
+	
+	return jsonData, nil
 }
 
 // parseOpenAIResponse parses the response from OpenAI API
@@ -283,4 +386,102 @@ func parseAnthropicResponse(responseBody []byte) (string, error) {
 	}
 
 	return response.Content[0].Text, nil
+}
+
+// processOpenAIStream processes the streaming response from OpenAI API
+func processOpenAIStream(responseBody io.Reader) (string, error) {
+	scanner := bufio.NewScanner(responseBody)
+	var fullResponse string
+	
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		
+		// Skip the "data: " prefix
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			
+			// Check for the end of the stream
+			if data == "[DONE]" {
+				break
+			}
+			
+			// Parse the JSON data
+			var streamResponse struct {
+				Choices []struct {
+					Delta struct {
+						Content string `json:"content"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			
+			if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
+				continue // Skip malformed data
+			}
+			
+			// Extract and print the content
+			if len(streamResponse.Choices) > 0 {
+				content := streamResponse.Choices[0].Delta.Content
+				if content != "" {
+					formattedContent := processTerminalFormatting(content)
+					fmt.Print(formattedContent)
+					fullResponse += content
+				}
+			}
+		}
+	}
+	
+	if err := scanner.Err(); err != nil {
+		return fullResponse, fmt.Errorf("读取流式响应失败: %w", err)
+	}
+	
+	return fullResponse, nil
+}
+
+// processAnthropicStream processes the streaming response from Anthropic API
+func processAnthropicStream(responseBody io.Reader) (string, error) {
+	scanner := bufio.NewScanner(responseBody)
+	var fullResponse string
+	
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" || !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		
+		// Skip the "data: " prefix
+		data := strings.TrimPrefix(line, "data: ")
+		
+		// Check for the end of the stream
+		if data == "[DONE]" {
+			break
+		}
+		
+		// Parse the JSON data
+		var streamResponse struct {
+			Type    string `json:"type"`
+			Delta   struct {
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		
+		if err := json.Unmarshal([]byte(data), &streamResponse); err != nil {
+			continue // Skip malformed data
+		}
+		
+		// Extract and print the content
+		if streamResponse.Type == "content_block_delta" && streamResponse.Delta.Text != "" {
+			formattedContent := processTerminalFormatting(streamResponse.Delta.Text)
+			fmt.Print(formattedContent)
+			fullResponse += streamResponse.Delta.Text
+		}
+	}
+	
+	if err := scanner.Err(); err != nil {
+		return fullResponse, fmt.Errorf("读取流式响应失败: %w", err)
+	}
+	
+	return fullResponse, nil
 }

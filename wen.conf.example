@@ -15,4 +15,12 @@ api_key=your_api_key_here
 # API URL for the selected provider
 # Default for OpenAI: https://api.openai.com/v1/chat/completions
 # Default for Anthropic: https://api.anthropic.com/v1/messages
-api_url=https://api.openai.com/v1/chat/completions 
+api_url=https://api.openai.com/v1/chat/completions
+
+# Custom prompt template (optional)
+# You can use {{input}} as a placeholder for user input
+# prompt_template=回答用户问题，务必做到简洁，不要有任何废话。输出纯文本格式(NO MARKDOWN)，适合在终端显示。使用以下格式添加颜色和样式：<red>红色文本</red>、<green>绿色文本</green>、<blue>蓝色文本</blue>、<bold>粗体文本</bold>、<yellow>黄色文本</yellow>。重要内容请使用颜色或粗体突出显示。
+
+# Whether to use streaming API (true or false)
+# Streaming provides incremental responses
+stream=true 

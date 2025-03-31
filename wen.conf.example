@@ -1,0 +1,18 @@
+# wen.conf - Configuration file for the wen CLI tool
+# This file should be placed at /etc/wen.conf
+
+# The AI provider to use (openai or anthropic)
+provider=openai
+
+# The model to use from the provider
+# For OpenAI: gpt-3.5-turbo, gpt-4, etc.
+# For Anthropic: claude-instant-1, claude-2, etc.
+model=gpt-3.5-turbo
+
+# Your API key for the selected provider
+api_key=your_api_key_here
+
+# API URL for the selected provider
+# Default for OpenAI: https://api.openai.com/v1/chat/completions
+# Default for Anthropic: https://api.anthropic.com/v1/messages
+api_url=https://api.openai.com/v1/chat/completions 

@@ -78,6 +78,9 @@ api_url=https://api.openai.com/v1/chat/completions
    - 默认API地址: https://api.anthropic.com/v1/messages
    - 推荐模型: claude-instant-1, claude-2
 
+2. **所有兼容OpenAI的模型**
+   - 模型: deepseek, qwen等等
+     
 ## 开发
 
 要在本地开发，克隆仓库后运行:
